@@ -1647,14 +1647,6 @@ ReadInput(InputInfoPtr pInfo)
     SynapticsResetTouchHwState(hw, FALSE);
 
     while (SynapticsGetHwState(pInfo, priv, hw)) {
-        /* Semi-mt device touch slots do not track touches. When there is a
-         * change in the number of touches, we must disregard the temporary
-         * motion changes. */
-        if (priv->has_semi_mt && hw->numFingers != priv->hwState->numFingers) {
-            hw->cumulative_dx = priv->hwState->cumulative_dx;
-            hw->cumulative_dy = priv->hwState->cumulative_dy;
-        }
-
         /* timer may cause actual events to lag behind (#48777) */
         if (priv->hwState->millis > hw->millis)
             hw->millis = priv->hwState->millis;
@@ -2638,8 +2630,8 @@ clickpad_guess_clickfingers(SynapticsPrivate * priv,
     for (i = 0; i < hw->num_mt_mask - 1; i++) {
         ValuatorMask *f1;
 
-        if (hw->slot_state[i] == SLOTSTATE_EMPTY ||
-            hw->slot_state[i] == SLOTSTATE_CLOSE)
+        if (hw->slot[i].state == SLOTSTATE_EMPTY ||
+            hw->slot[i].state == SLOTSTATE_CLOSE)
             continue;
 
         f1 = hw->mt_mask[i];
@@ -2648,8 +2640,8 @@ clickpad_guess_clickfingers(SynapticsPrivate * priv,
             ValuatorMask *f2;
             double x1, x2, y1, y2;
 
-            if (hw->slot_state[j] == SLOTSTATE_EMPTY ||
-                hw->slot_state[j] == SLOTSTATE_CLOSE)
+            if (hw->slot[i].state == SLOTSTATE_EMPTY ||
+                hw->slot[i].state == SLOTSTATE_CLOSE)
                 continue;
 
             f2 = hw->mt_mask[j];
@@ -2929,12 +2921,12 @@ UpdateTouchState(InputInfoPtr pInfo, struct SynapticsHwState *hw)
     int i;
 
     for (i = 0; i < hw->num_mt_mask; i++) {
-        if (hw->slot_state[i] == SLOTSTATE_OPEN) {
+        if (hw->slot[i].state == SLOTSTATE_OPEN) {
             priv->open_slots[priv->num_active_touches] = i;
             priv->num_active_touches++;
             BUG_WARN(priv->num_active_touches > priv->num_slots);
         }
-        else if (hw->slot_state[i] == SLOTSTATE_CLOSE) {
+        else if (hw->slot[i].state == SLOTSTATE_CLOSE) {
             Bool found = FALSE;
             int j;
 
@@ -2973,9 +2965,9 @@ HandleTouches(InputInfoPtr pInfo, struct SynapticsHwState *hw)
 
     /* Count new number of active touches */
     for (i = 0; i < hw->num_mt_mask; i++) {
-        if (hw->slot_state[i] == SLOTSTATE_OPEN)
+        if (hw->slot[i].state == SLOTSTATE_OPEN)
             new_active_touches++;
-        else if (hw->slot_state[i] == SLOTSTATE_CLOSE)
+        else if (hw->slot[i].state == SLOTSTATE_CLOSE)
             new_active_touches--;
     }
 
@@ -3016,7 +3008,7 @@ HandleTouches(InputInfoPtr pInfo, struct SynapticsHwState *hw)
 
     /* Send touch begin events for all new touches */
     for (i = 0; i < hw->num_mt_mask; i++)
-        if (hw->slot_state[i] == SLOTSTATE_OPEN)
+        if (hw->slot[i].state == SLOTSTATE_OPEN)
             xf86PostTouchEvent(pInfo->dev, i, XI_TouchBegin, 0, hw->mt_mask[i]);
 
     /* Send touch update/end events for all the rest */
@@ -3024,10 +3016,10 @@ HandleTouches(InputInfoPtr pInfo, struct SynapticsHwState *hw)
         int slot = priv->open_slots[i];
 
         /* Don't send update event if we just reopened the touch above */
-        if (hw->slot_state[slot] == SLOTSTATE_UPDATE && !restart_touches)
+        if (hw->slot[slot].state == SLOTSTATE_UPDATE && !restart_touches)
             xf86PostTouchEvent(pInfo->dev, slot, XI_TouchUpdate, 0,
                                hw->mt_mask[slot]);
-        else if (hw->slot_state[slot] == SLOTSTATE_CLOSE)
+        else if (hw->slot[slot].state == SLOTSTATE_CLOSE)
             xf86PostTouchEvent(pInfo->dev, slot, XI_TouchEnd, 0,
                                hw->mt_mask[slot]);
     }
@@ -3081,7 +3073,6 @@ HandleState(InputInfoPtr pInfo, struct SynapticsHwState *hw, CARD32 now,
     int delay = 1000000000;
     int timeleft;
     Bool inside_active_area;
-    Bool using_cumulative_coords = FALSE;
     Bool ignore_motion;
 
     /* We need both and x/y, the driver can't handle just one of the two
@@ -3095,15 +3086,6 @@ HandleState(InputInfoPtr pInfo, struct SynapticsHwState *hw, CARD32 now,
             hw->x = (hw->x == INT_MIN) ? 0 : hw->x;
             hw->y = (hw->y == INT_MIN) ? 0 : hw->y;
         }
-    }
-
-    /* If a physical button is pressed on a clickpad, use cumulative relative
-     * touch movements for motion */
-    if (para->clickpad && (priv->lastButtons & 7) &&
-        priv->last_button_area != TOP_BUTTON_AREA) {
-        hw->x = hw->cumulative_dx;
-        hw->y = hw->cumulative_dy;
-        using_cumulative_coords = TRUE;
     }
 
     /* apply hysteresis before doing anything serious. This cancels
@@ -3123,7 +3105,7 @@ HandleState(InputInfoPtr pInfo, struct SynapticsHwState *hw, CARD32 now,
         priv->last_button_area = NO_BUTTON_AREA;
 
     ignore_motion = para->touchpad_off == TOUCHPAD_OFF ||
-        (!using_cumulative_coords && priv->last_button_area != NO_BUTTON_AREA);
+        (priv->last_button_area != NO_BUTTON_AREA);
 
     /* these two just update hw->left, right, etc. */
     update_hw_button_state(pInfo, hw, now, &delay);

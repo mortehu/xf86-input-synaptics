@@ -54,6 +54,20 @@ enum SynapticsSlotState {
 /* used to mark emulated hw button state */
 #define BTN_EMULATED_FLAG 0x80
 
+
+/*
+ * A structure to describe the state of a touch
+ */
+struct SynapticsSlot {
+  enum SynapticsSlotState state;
+  int x;                        /* X position of finger */
+  int y;                        /* Y position of finger */
+  int major_len;                /* Length of major axis of contact */
+  int minor_len;                /* Length of minor axis of contact */
+  int tool_major_len;
+  int tool_minor_len;
+};
+
 /*
  * A structure to describe the state of the touchpad hardware (buttons and pad)
  */
@@ -62,8 +76,6 @@ struct SynapticsHwState {
     int x;                      /* X position of finger */
     int y;                      /* Y position of finger */
     int z;                      /* Finger pressure */
-    int cumulative_dx;          /* Cumulative delta X for clickpad dragging */
-    int cumulative_dy;          /* Cumulative delta Y for clickpad dragging */
     int numFingers;
     int fingerWidth;
 
@@ -77,7 +89,8 @@ struct SynapticsHwState {
 
     int num_mt_mask;
     ValuatorMask **mt_mask;
-    enum SynapticsSlotState *slot_state;
+    struct SynapticsSlot *slot;
+    struct SynapticsSlot *prev_slot;
 };
 
 struct CommData {

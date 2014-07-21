@@ -572,31 +572,45 @@ EventProcessTouchEvent(InputInfoPtr pInfo, struct SynapticsHwState *hw,
         if (slot_index < 0)
             return;
 
-        if (hw->slot_state[slot_index] == SLOTSTATE_OPEN_EMPTY)
-            hw->slot_state[slot_index] = SLOTSTATE_UPDATE;
+        if (hw->slot[slot_index].state == SLOTSTATE_OPEN_EMPTY)
+            hw->slot[slot_index].state = SLOTSTATE_UPDATE;
         if (ev->code == ABS_MT_TRACKING_ID) {
             if (ev->value >= 0) {
-                hw->slot_state[slot_index] = SLOTSTATE_OPEN;
+                hw->slot[slot_index].state = SLOTSTATE_OPEN;
                 proto_data->num_touches++;
                 valuator_mask_copy(hw->mt_mask[slot_index],
                                    proto_data->last_mt_vals[slot_index]);
             }
-            else if (hw->slot_state[slot_index] != SLOTSTATE_EMPTY) {
-                hw->slot_state[slot_index] = SLOTSTATE_CLOSE;
+            else if (hw->slot[slot_index].state != SLOTSTATE_EMPTY) {
+                hw->slot[slot_index].state = SLOTSTATE_CLOSE;
                 proto_data->num_touches--;
             }
         }
         else {
             ValuatorMask *mask = proto_data->last_mt_vals[slot_index];
             int map = proto_data->axis_map[ev->code - ABS_MT_TOUCH_MAJOR];
-            int last_val = valuator_mask_get(mask, map);
 
             valuator_mask_set(hw->mt_mask[slot_index], map, ev->value);
-            if (EventTouchSlotPreviouslyOpen(priv, slot_index)) {
-                if (ev->code == ABS_MT_POSITION_X)
-                    hw->cumulative_dx += ev->value - last_val;
-                else if (ev->code == ABS_MT_POSITION_Y)
-                    hw->cumulative_dy += ev->value - last_val;
+
+            switch (ev->code) {
+              case ABS_MT_POSITION_X:
+                hw->slot[slot_index].x = ev->value;
+                break;
+              case ABS_MT_POSITION_Y:
+                hw->slot[slot_index].y = ev->value;
+                break;
+              case ABS_MT_TOUCH_MAJOR:
+                hw->slot[slot_index].major_len = ev->value;
+                break;
+              case ABS_MT_TOUCH_MINOR:
+                hw->slot[slot_index].minor_len = ev->value;
+                break;
+              case ABS_MT_WIDTH_MAJOR:
+                hw->slot[slot_index].tool_major_len = ev->value;
+                break;
+              case ABS_MT_WIDTH_MINOR:
+                hw->slot[slot_index].tool_minor_len = ev->value;
+                break;
             }
 
             valuator_mask_set(mask, map, ev->value);
@@ -639,6 +653,49 @@ apply_st_scaling(struct eventcomm_proto_data *proto_data, int value, int axis)
         proto_data->st_to_mt_offset[axis];
 }
 
+static void FinishMultiTouch(InputInfoPtr pInfo, struct SynapticsHwState *hw) {
+    SynapticsPrivate *priv = (SynapticsPrivate *) pInfo->private;
+    struct eventcomm_proto_data *proto_data = priv->proto_data;
+    int slot_index;
+    Bool use_cumulative = hw->left || hw->right || hw->middle;
+
+    for (slot_index = 0; slot_index < hw->num_mt_mask; ++slot_index) {
+        const struct SynapticsSlot* slot = &hw->slot[slot_index];
+        const struct SynapticsSlot* prev_slot = &hw->prev_slot[slot_index];
+        if (slot->state != SLOTSTATE_UPDATE || prev_slot->state != SLOTSTATE_UPDATE) continue;
+
+        int delta_x = slot->x - prev_slot->x;
+        int delta_y = slot->y - prev_slot->y;
+
+        int delta_pos = delta_x * delta_x + delta_y * delta_y;
+
+        if (delta_pos > 0) {
+            int delta_major = (slot->major_len - prev_slot->major_len);
+            int delta_minor = (slot->minor_len - prev_slot->minor_len);
+            int delta_size = delta_major * delta_major + delta_minor * delta_minor;
+
+            if (delta_pos <= delta_size) {
+                delta_x = 0;
+                delta_y = 0;
+            } else if (delta_size > 0) {
+                float scale = 1.0 - sqrt(delta_size) / sqrt(delta_pos);
+                delta_x *= scale;
+                delta_y *= scale;
+            }
+        }
+
+        // TOOD(mortehu): Figure out what st_to_mt_scale is for.
+
+        hw->x += delta_x;
+        hw->y += delta_y;
+
+        if (!use_cumulative)
+          break;
+    }
+
+    memcpy(hw->prev_slot, hw->slot, hw->num_mt_mask * sizeof(struct SynapticsSlot));
+}
+
 Bool
 EventReadHwState(InputInfoPtr pInfo,
                  struct CommData *comm, struct SynapticsHwState *hwRet)
@@ -649,19 +706,10 @@ EventReadHwState(InputInfoPtr pInfo,
     SynapticsPrivate *priv = (SynapticsPrivate *) pInfo->private;
     SynapticsParameters *para = &priv->synpara;
     struct eventcomm_proto_data *proto_data = priv->proto_data;
-    Bool sync_cumulative = FALSE;
 
     set_libevdev_log_handler();
 
     SynapticsResetTouchHwState(hw, FALSE);
-
-    /* Reset cumulative values if buttons were not previously pressed,
-     * or no finger was previously present. */
-    if ((!hw->left && !hw->right && !hw->middle) || hw->z < para->finger_low) {
-        hw->cumulative_dx = hw->x;
-        hw->cumulative_dy = hw->y;
-        sync_cumulative = TRUE;
-    }
 
     while (SynapticsReadEvent(pInfo, &ev)) {
         switch (ev.type) {
@@ -670,6 +718,8 @@ EventReadHwState(InputInfoPtr pInfo,
             case SYN_REPORT:
                 hw->numFingers = count_fingers(pInfo, comm);
                 hw->millis = 1000 * ev.time.tv_sec + ev.time.tv_usec / 1000;
+                if (hw->num_mt_mask > 0)
+                    FinishMultiTouch(pInfo, hw);
                 SynapticsCopyHwState(hwRet, hw);
                 return TRUE;
             }
@@ -735,14 +785,12 @@ EventReadHwState(InputInfoPtr pInfo,
             if (ev.code < ABS_MT_SLOT) {
                 switch (ev.code) {
                 case ABS_X:
+                    if (hw->num_mt_mask > 0) break;
                     hw->x = apply_st_scaling(proto_data, ev.value, 0);
-                    if (sync_cumulative)
-                        hw->cumulative_dx = hw->x;
                     break;
                 case ABS_Y:
+                    if (hw->num_mt_mask > 0) break;
                     hw->y = apply_st_scaling(proto_data, ev.value, 1);
-                    if (sync_cumulative)
-                        hw->cumulative_dy = hw->y;
                     break;
                 case ABS_PRESSURE:
                     hw->z = ev.value;

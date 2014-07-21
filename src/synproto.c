@@ -45,13 +45,17 @@ HwStateAllocTouch(struct SynapticsHwState *hw, SynapticsPrivate * priv)
             goto fail;
     }
 
-    hw->slot_state = calloc(hw->num_mt_mask, sizeof(enum SynapticsSlotState));
-    if (!hw->slot_state)
+    hw->slot = calloc(hw->num_mt_mask, sizeof(struct SynapticsSlot));
+    if (!hw->slot)
+        goto fail;
+    hw->prev_slot = calloc(hw->num_mt_mask, sizeof(struct SynapticsSlot));
+    if (!hw->prev_slot)
         goto fail;
 
     return Success;
 
  fail:
+    free(hw->slot);
     for (i--; i >= 0; i--)
         valuator_mask_free(&hw->mt_mask[i]);
     free(hw->mt_mask);
@@ -84,7 +88,8 @@ SynapticsHwStateFree(struct SynapticsHwState **hw)
     if (!*hw)
         return;
 
-    free((*hw)->slot_state);
+    free((*hw)->prev_slot);
+    free((*hw)->slot);
     for (i = 0; i < (*hw)->num_mt_mask; i++)
         valuator_mask_free(&(*hw)->mt_mask[i]);
     free((*hw)->mt_mask);
@@ -103,8 +108,6 @@ SynapticsCopyHwState(struct SynapticsHwState *dst,
     dst->x = src->x;
     dst->y = src->y;
     dst->z = src->z;
-    dst->cumulative_dx = src->cumulative_dx;
-    dst->cumulative_dy = src->cumulative_dy;
     dst->numFingers = src->numFingers;
     dst->fingerWidth = src->fingerWidth;
     dst->left = src->left & BTN_EMULATED_FLAG ? 0 : src->left;
@@ -115,8 +118,10 @@ SynapticsCopyHwState(struct SynapticsHwState *dst,
     dst->middle = src->middle & BTN_EMULATED_FLAG ? 0 : src->middle;
     for (i = 0; i < dst->num_mt_mask && i < src->num_mt_mask; i++)
         valuator_mask_copy(dst->mt_mask[i], src->mt_mask[i]);
-    memcpy(dst->slot_state, src->slot_state,
-           dst->num_mt_mask * sizeof(enum SynapticsSlotState));
+    memcpy(dst->slot, src->slot,
+           dst->num_mt_mask * sizeof(struct SynapticsSlot));
+    memcpy(dst->prev_slot, src->prev_slot,
+           dst->num_mt_mask * sizeof(struct SynapticsSlot));
 }
 
 void
@@ -126,8 +131,6 @@ SynapticsResetHwState(struct SynapticsHwState *hw)
     hw->x = INT_MIN;
     hw->y = INT_MIN;
     hw->z = 0;
-    hw->cumulative_dx = 0;
-    hw->cumulative_dy = 0;
     hw->numFingers = 0;
     hw->fingerWidth = 0;
 
@@ -154,16 +157,16 @@ SynapticsResetTouchHwState(struct SynapticsHwState *hw, Bool set_slot_empty)
         for (j = 2; j < valuator_mask_num_valuators(hw->mt_mask[i]); j++)
             valuator_mask_unset(hw->mt_mask[i], j);
 
-        switch (hw->slot_state[i]) {
+        switch (hw->slot[i].state) {
         case SLOTSTATE_OPEN:
         case SLOTSTATE_OPEN_EMPTY:
         case SLOTSTATE_UPDATE:
-            hw->slot_state[i] =
+            hw->slot[i].state =
                 set_slot_empty ? SLOTSTATE_EMPTY : SLOTSTATE_OPEN_EMPTY;
             break;
 
         default:
-            hw->slot_state[i] = SLOTSTATE_EMPTY;
+            hw->slot[i].state = SLOTSTATE_EMPTY;
             break;
         }
     }
