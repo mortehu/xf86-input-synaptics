@@ -657,7 +657,6 @@ static void FinishMultiTouch(InputInfoPtr pInfo, struct SynapticsHwState *hw) {
     SynapticsPrivate *priv = (SynapticsPrivate *) pInfo->private;
     struct eventcomm_proto_data *proto_data = priv->proto_data;
     int slot_index;
-    Bool use_cumulative = hw->left || hw->right || hw->middle;
 
     for (slot_index = 0; slot_index < hw->num_mt_mask; ++slot_index) {
         const struct SynapticsSlot* slot = &hw->slot[slot_index];
@@ -689,8 +688,6 @@ static void FinishMultiTouch(InputInfoPtr pInfo, struct SynapticsHwState *hw) {
         hw->x += delta_x;
         hw->y += delta_y;
 
-        if (!use_cumulative)
-          break;
     }
 
     memcpy(hw->prev_slot, hw->slot, hw->num_mt_mask * sizeof(struct SynapticsSlot));
