@@ -659,28 +659,36 @@ static void FinishMultiTouch(InputInfoPtr pInfo, struct SynapticsHwState *hw) {
     int slot_index;
 
     for (slot_index = 0; slot_index < hw->num_mt_mask; ++slot_index) {
-        const struct SynapticsSlot* slot = &hw->slot[slot_index];
+        struct SynapticsSlot* slot = &hw->slot[slot_index];
         const struct SynapticsSlot* prev_slot = &hw->prev_slot[slot_index];
-        if (slot->state != SLOTSTATE_UPDATE || prev_slot->state != SLOTSTATE_UPDATE) continue;
+        if (slot->state != SLOTSTATE_UPDATE)
+            continue;
+        if (prev_slot->state != SLOTSTATE_UPDATE) {
+            slot->dampening_timeout = hw->millis + 30;
+            continue;
+        }
 
         int delta_x = slot->x - prev_slot->x;
         int delta_y = slot->y - prev_slot->y;
-
         int delta_pos = delta_x * delta_x + delta_y * delta_y;
 
-        if (delta_pos > 0) {
-            int delta_major = (slot->major_len - prev_slot->major_len);
-            int delta_minor = (slot->minor_len - prev_slot->minor_len);
-            int delta_size = delta_major * delta_major + delta_minor * delta_minor;
+        int delta_major = (slot->major_len - prev_slot->major_len);
+        int delta_minor = (slot->minor_len - prev_slot->minor_len);
+        int delta_size = delta_major * delta_major + delta_minor * delta_minor;
 
-            if (delta_pos <= delta_size) {
-                delta_x = 0;
-                delta_y = 0;
-            } else if (delta_size > 0) {
-                float scale = 1.0 - sqrt(delta_size) / sqrt(delta_pos);
-                delta_x *= scale;
-                delta_y *= scale;
-            }
+        if (delta_pos <= delta_size) {
+            delta_x = 0;
+            delta_y = 0;
+            slot->dampening_timeout = hw->millis + 30;
+        } else if (delta_size > 0) {
+            float scale = 1.0 - sqrt(delta_size) / sqrt(delta_pos);
+            delta_x *= scale;
+            delta_y *= scale;
+        }
+
+        if (hw->millis < slot->dampening_timeout) {
+            delta_x = 0;
+            delta_y = 0;
         }
 
         // TOOD(mortehu): Figure out what st_to_mt_scale is for.

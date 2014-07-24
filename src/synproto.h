@@ -66,6 +66,7 @@ struct SynapticsSlot {
   int minor_len;                /* Length of minor axis of contact */
   int tool_major_len;
   int tool_minor_len;
+  CARD32 dampening_timeout;     /* Ignore all motion until this timestamp */
 };
 
 /*
